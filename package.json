@@ -1,6 +1,6 @@
 {
   "name": "pi-bedrouter",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Pi extension for bedrouter: starts the cost-aware Bedrock model router, registers it as a provider, and shows which model served each request",
   "keywords": [
     "pi-package",
@@ -43,7 +43,7 @@
     "prepublishOnly": "npm test && npm run typecheck"
   },
   "dependencies": {
-    "bedrouter": "^0.3.0"
+    "bedrouter": "^0.4.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.85.0"
