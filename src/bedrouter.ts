@@ -124,6 +124,13 @@ export const FALLBACK_CONFIG: BedrouterConfig = {
   routing: { classes: { anthropic: { trivial: "haiku", execute: "sonnet", explore: "opus" }, openai: { execute: "gpt-oss-20b", explore: "gpt-oss-120b" } } },
 };
 export const conversation = (s: Settings, key: string) => getJson<ConversationStats>(`${baseUrl(s)}/v1/conversations/${key}`);
+export const recentConversations = async (s: Settings) => (await getJson<{ data: ConversationStats[] }>(`${baseUrl(s)}/v1/conversations`))?.data ?? [];
+
+/** True when a conversation other than `ours` sent a request within `windowMs`: another client is using the server. */
+export async function othersActive(s: Settings, ours: Set<string>, windowMs = 5 * 60_000, now = Date.now()): Promise<boolean> {
+  const recent = await recentConversations(s);
+  return recent.some((c) => !ours.has(c.key) && now - Date.parse(c.lastTs) < windowMs);
+}
 
 export const serverLog = (s: Settings) => path.join(homeDir(s), "server.log");
 export const decisionLog = (s: Settings) => path.join(homeDir(s), "bedrouter.log.jsonl");

@@ -22,9 +22,15 @@ export type Settings = {
   providerName: string;
   /** Seconds between background health checks that keep the footer honest and restart a dead server (0 disables). */
   healthPollS: number;
+  /**
+   * What happens to the server when Pi quits (not on /reload or session switches):
+   * "if-started-here": stop it if this session started it and no other client used it in the last few minutes;
+   * "always": stop it whenever this session started it; "never": leave it running.
+   */
+  stopOnExit: "if-started-here" | "always" | "never";
 };
 
-export const DEFAULTS: Settings = { port: 20129, autoStart: true, autoSelect: "auto", debug: false, footer: true, providerName: "bedrouter", healthPollS: 15 };
+export const DEFAULTS: Settings = { port: 20129, autoStart: true, autoSelect: "auto", debug: false, footer: true, providerName: "bedrouter", healthPollS: 15, stopOnExit: "if-started-here" };
 
 export const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
 export const settingsPath = () => path.join(agentDir(), "pi-bedrouter.json");

@@ -25,5 +25,7 @@ test("locate/ensureHome/readConfig/start against a checkout", { skip: !checkout 
   else assert.match(r.error, /credentials|aws sso login|did not come up/);
   const d = br.run(s, loc, ["doctor"]);
   assert.match(d.out, /bedrouter: credentials/);
-  assert.equal(br.locate({ ...s, path: "/nope" }).found, false);
+  // a bad settings.path falls back to the npm dependency when one is installed, otherwise reports not found
+  const bad = br.locate({ ...s, path: "/nope" });
+  assert.ok(!bad.found || bad.source === "dependency", JSON.stringify(bad));
 });

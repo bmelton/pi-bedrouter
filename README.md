@@ -39,6 +39,7 @@ Bedrouter needs AWS credentials that can call Bedrock; see its README for the `a
 | `debug` | `false` | Start the server with `BEDROUTER_DEBUG=1` (per-request trace in `server.log`) |
 | `footer` | `true` | Show the routing status line in Pi's footer |
 | `providerName` | `"bedrouter"` | Provider name registered in Pi |
+| `stopOnExit` | `"if-started-here"` | What happens to the server when Pi **quits** (`/reload` and session switches never stop it). `if-started-here`: stop it if this session started it and no other client sent a request in the last 5 minutes; `always`: stop it whenever this session started it; `never`: leave it running. Pi tears down its UI before extensions are told about the quit, so this cannot be a prompt; the policy is shown when the server is started and in `/bedrouter status` |
 | `healthPollS` | `15` | Seconds between background health checks. A dead server flips the footer to `bedrouter: DOWN` and, with `autoStart`, is restarted (at most once a minute); `0` disables the poll |
 
 Example for a developer with a checkout:
@@ -52,7 +53,7 @@ Example for a developer with a checkout:
 | Command | Does |
 | --- | --- |
 | `/bedrouter` or `/bedrouter status` | Install location, server health (pid, version, region, classifier), registered models, current model, last decision |
-| `/bedrouter start` / `stop` / `restart` | Manage the server. It is shared by every Pi session, so `stop` affects all of them |
+| `/bedrouter start` / `stop` / `restart` | Manage the server. It is shared by every Pi session, so `stop` affects all of them; see `stopOnExit` for what happens when Pi quits |
 | `/bedrouter install` | `npm install` the dependency, or `npm run build` a checkout that has no `dist/` |
 | `/bedrouter doctor` | Which credential source resolved, expiry, the loaded ladder |
 | `/bedrouter probe` | One 1-token request per rung: which models this AWS account can actually invoke |

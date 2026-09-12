@@ -23,6 +23,8 @@ export default async function (pi: ExtensionAPI) {
   let lastCtx: ExtensionContext | null = null; // most recent context, for the background poll to update the footer
   let serverUp: boolean | null = null;         // last known health; null = never checked
   let restartAttemptAt = 0;                    // throttle auto-restarts to one per 60 s
+  let startedHere = false;                     // this session launched the server (so it may stop it on quit)
+  const ourConversations = new Set<string>();  // bedrouter conversation keys seen from this session
 
   const isOurs = (ctx: ExtensionContext) => ctx.model?.provider === settings.providerName;
   const setStatus = (ctx: ExtensionContext, text: string | undefined) => { lastCtx = ctx; if (ctx.hasUI && settings.footer) ctx.ui.setStatus("bedrouter", text); };
@@ -57,6 +59,8 @@ export default async function (pi: ExtensionAPI) {
     return `registered ${models.length} models from ${source}: ${registeredModelIds.join(", ")}`;
   }
 
+  const exitPolicyText = () => settings.stopOnExit === "never" ? "left running" : settings.stopOnExit === "always" ? "stopped" : "stopped unless another client is using it";
+
   /** Locate → (install) → start → register. Returns a human summary. Never throws. */
   async function bringUp(ctx: ExtensionContext | null, opts: { install?: boolean; start?: boolean } = {}): Promise<{ ok: boolean; lines: string[] }> {
     const lines: string[] = [];
@@ -76,10 +80,13 @@ export default async function (pi: ExtensionAPI) {
     }
     lines.push(await registerProvider(loc as br.Found));
     if (opts.start) {
+      const before = await br.health(settings);
       const r = await br.start(settings, loc as br.Found);
       for (const f of r.created) lines.push(`created ${f} from the example; edit it for this machine (AWS_PROFILE, ladder)`);
-      if (r.ok) lines.push(`bedrouter ${r.health.version} up on ${br.baseUrl(settings)} (pid ${r.health.pid}, region ${r.health.region}, classifier ${r.health.classifier ?? "off"})`);
-      else { lines.push(r.error); return { ok: false, lines }; }
+      if (r.ok) {
+        if (!before?.ok) startedHere = true;
+        lines.push(`bedrouter ${r.health.version} up on ${br.baseUrl(settings)} (pid ${r.health.pid}, region ${r.health.region}, classifier ${r.health.classifier ?? "off"})${!before?.ok ? `; started by this session, on quit: ${exitPolicyText()}` : "; was already running (not started here, left alone on quit)"}`);
+      } else { lines.push(r.error); return { ok: false, lines }; }
     }
     return { ok: true, lines };
   }
@@ -132,6 +139,7 @@ export default async function (pi: ExtensionAPI) {
     if (!d) return;
     last = d;
     serverUp = true;
+    if (d.conversation) ourConversations.add(d.conversation);
     setStatus(ctx, statusLine(last, stats));
   });
 
@@ -163,7 +171,14 @@ export default async function (pi: ExtensionAPI) {
   }
   if (settings.healthPollS > 0) { poll = setInterval(() => void checkHealth(), settings.healthPollS * 1000); poll.unref(); }
 
-  pi.on("session_shutdown", async () => { if (poll) clearInterval(poll); /* the server is left running on purpose: other Pi sessions share it */ });
+  pi.on("session_shutdown", async (ev) => {
+    if (poll) clearInterval(poll);
+    // Only a real quit ends the server; /reload and session switches keep it (the next session picks it straight up).
+    // The TUI is already gone at this point, so the policy is a setting, not a prompt (see stopOnExit).
+    if (ev.reason !== "quit" || !startedHere || settings.stopOnExit === "never") return;
+    if (settings.stopOnExit === "if-started-here" && (await br.othersActive(settings, ourConversations))) return;
+    await br.stop(settings);
+  });
 
   // ---- /bedrouter ------------------------------------------------------------------------------------------------
   const SUB = ["status", "start", "stop", "restart", "install", "doctor", "probe", "report", "log", "models", "fitnotes", "config", "help"];
@@ -186,6 +201,7 @@ export default async function (pi: ExtensionAPI) {
             `provider: ${settings.providerName} → ${registeredModelIds.length ? registeredModelIds.join(", ") : "(not registered)"}`,
             `session:  ${isOurs(ctx) ? `using ${ctx.model?.id}` : `not using bedrouter (model ${ctx.model?.provider}/${ctx.model?.id})`}`,
             `last:     ${last ? `${last.requested} → ${last.model}  ${last.cls} · ${last.reason}${last.classifier ? `  classifier: ${last.classifier}` : ""}` : "-"}`,
+            `on quit:  ${startedHere ? `server ${exitPolicyText()} (stopOnExit: ${settings.stopOnExit})` : "server was not started by this session; left alone"}`,
             `settings: ${settingsPath()}${fs.existsSync(settingsPath()) ? "" : " (defaults; /bedrouter config to create)"}`,
           ];
           show("bedrouter status", lines.join("\n"));
@@ -246,7 +262,7 @@ export default async function (pi: ExtensionAPI) {
         }
         case "config": {
           if (!fs.existsSync(settingsPath())) saveSettings(settings);
-          show("bedrouter settings", `${settingsPath()}\n\n${fs.readFileSync(settingsPath(), "utf8")}\nKeys: path, home, port, autoStart, autoSelect (model id or false), debug, footer, providerName. Edit the file, then /reload.`);
+          show("bedrouter settings", `${settingsPath()}\n\n${fs.readFileSync(settingsPath(), "utf8")}\nKeys: path, home, port, autoStart, autoSelect (model id or false), debug, footer, providerName, healthPollS, stopOnExit (if-started-here | always | never). Edit the file, then /reload.`);
           break;
         }
         default:
