@@ -1,0 +1,48 @@
+// pi-bedrouter settings: ~/.pi/agent/pi-bedrouter.json (all keys optional).
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+export type Settings = {
+  /** Path to a bedrouter checkout or install. Default: the `bedrouter` package this extension depends on. */
+  path?: string;
+  /** Working directory for the server: holds .env, bedrouter.json, bedrouter.log.jsonl, server.log. Default: `path` when set, else ~/.bedrouter. */
+  home?: string;
+  /** Port to run/expect bedrouter on. */
+  port: number;
+  /** Start the server on session start when it is not running. */
+  autoStart: boolean;
+  /** Model id (from bedrouter's aliases, e.g. "auto" or "auto-oss") to switch the session to when bedrouter is healthy; false to leave the model alone. */
+  autoSelect: string | false;
+  /** Start the server with BEDROUTER_DEBUG=1 (per-request trace in server.log). */
+  debug: boolean;
+  /** Show the routing status line in Pi's footer. */
+  footer: boolean;
+  /** Provider name registered in Pi. */
+  providerName: string;
+  /** Seconds between background health checks that keep the footer honest and restart a dead server (0 disables). */
+  healthPollS: number;
+};
+
+export const DEFAULTS: Settings = { port: 20129, autoStart: true, autoSelect: "auto", debug: false, footer: true, providerName: "bedrouter", healthPollS: 15 };
+
+export const agentDir = () => process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+export const settingsPath = () => path.join(agentDir(), "pi-bedrouter.json");
+const expand = (p: string) => p.replace(/^~(?=$|\/)/, os.homedir());
+
+export function loadSettings(): Settings {
+  let user: Partial<Settings> = {};
+  try { user = JSON.parse(fs.readFileSync(settingsPath(), "utf8")); } catch { /* none yet */ }
+  const s: Settings = { ...DEFAULTS, ...user };
+  if (s.path) s.path = expand(s.path);
+  if (s.home) s.home = expand(s.home);
+  if (process.env.BEDROUTER_PORT) s.port = Number(process.env.BEDROUTER_PORT);
+  return s;
+}
+
+export function saveSettings(s: Partial<Settings>): void {
+  fs.mkdirSync(agentDir(), { recursive: true });
+  let cur: Partial<Settings> = {};
+  try { cur = JSON.parse(fs.readFileSync(settingsPath(), "utf8")); } catch { /* none */ }
+  fs.writeFileSync(settingsPath(), JSON.stringify({ ...cur, ...s }, null, 2) + "\n");
+}
