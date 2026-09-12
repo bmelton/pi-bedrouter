@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { piModels, fitNotes } from "../src/models.js";
-import { fromHeaders, statusLine } from "../src/footer.js";
+import { fromHeaders, sessionsTable, statusLine, usageReport } from "../src/footer.js";
 
 const cfg = {
   families: {
@@ -47,4 +47,26 @@ test("footer: headers → decision → status line, with and without stats", () 
   // painted: the check mark and bar carry theme colours, the text does not
   const painted = statusLine(null, null, (c, t) => `<${c}>${t}</${c}>`);
   assert.equal(painted, `<dim>│</dim> <success>✓</success> bedrouter ready${NB}`);
+});
+
+test("usage: session report and sessions table", () => {
+  const st = { key: "sess-1", requests: 7, errors: 1, conversations: 3, costUsd: 0.0312, requestedCostUsd: 0.0512, classifierCostUsd: 0.0004, inputTokens: 12000, outputTokens: 900, cacheReadTokens: 8000, escalations: 1,
+    byRoute: { "sonnet -> sonnet": { requests: 5, costUsd: 0.02, requestedCostUsd: 0.02, inputTokens: 9000, outputTokens: 600 }, "sonnet -> haiku": { requests: 2, costUsd: 0.0112, requestedCostUsd: 0.0312, inputTokens: 3000, outputTokens: 300 } },
+    firstTs: "2026-09-12T10:00:00.000Z", lastTs: "2026-09-12T10:42:00.000Z" };
+  const r = usageReport(st, { sessionId: "sess-1" });
+  const lines = r.split("\n");
+  assert.equal(lines[0], "session   sess-1");
+  assert.equal(lines[1], "requests  7 (1 errors), conversations 3, escalations 1, over 42 min");
+  assert.equal(lines[2], "tokens    in 12.0k  out 900  cache-read 8.0k");
+  assert.equal(lines[3], "spend     $0.0316  (models $0.0312 + classifier $0.0004)");
+  assert.match(lines[5], /^routing   saved \$0\.0200 \(39\.1%\)$/);
+  assert.ok(lines.some((l) => l.startsWith("  sonnet -> sonnet") && l.includes("$0.0200")));
+  assert.ok(lines.indexOf(lines.find((l) => l.startsWith("  sonnet -> sonnet"))!) < lines.indexOf(lines.find((l) => l.startsWith("  sonnet -> haiku"))!), "routes sorted by cost desc");
+  assert.match(usageReport({ ...st, costUsd: 0.06 }), /over asked-for/);
+  assert.match(usageReport({ ...st, costUsd: st.requestedCostUsd, classifierCostUsd: 0 }), /routing   same as asked-for/);
+  assert.match(usageReport(st, { conversationOnly: true }), /current conversation only/);
+  const t = sessionsTable([st, { ...st, key: "sess-2" }], "sess-2");
+  assert.match(t, /^\* sess-2/m);
+  assert.match(t, /^  sess-1/m);
+  assert.equal(sessionsTable([]), "(no sessions yet: nothing has sent x-bedrouter-session to this server)");
 });

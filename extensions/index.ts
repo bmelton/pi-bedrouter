@@ -6,19 +6,21 @@
 //  - optionally switches the session to bedrouter/auto so nobody has to pick a model
 //  - shows which model served each request in the footer, from bedrouter's x-bedrouter-* response headers,
 //    plus the running session cost against what the requested model would have cost
-//  - /bedrouter status|start|stop|restart|install|doctor|probe|report|log|models|fitnotes|config
+//  - tags every request with Pi's session id (x-bedrouter-session) so bedrouter can total the whole session, not just
+//    one conversation key; /bedrouter usage shows those totals
+//  - /bedrouter status|start|stop|restart|install|doctor|probe|usage|report|log|models|fitnotes|config
 import fs from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadSettings, saveSettings, settingsPath, agentDir, type Settings } from "../src/settings.js";
 import * as br from "../src/bedrouter.js";
 import { fitNotes, piModels } from "../src/models.js";
-import { downLine, fromHeaders, readyLine, restartingLine, statusLine, type LastDecision, type Paint } from "../src/footer.js";
+import { downLine, fromHeaders, readyLine, restartingLine, sessionsTable, statusLine, usageReport, type CostTotals, type LastDecision, type Paint } from "../src/footer.js";
 
 export default async function (pi: ExtensionAPI) {
   let settings = loadSettings();
   let last: LastDecision | null = null;
-  let stats: br.ConversationStats | null = null;
+  let stats: CostTotals | null = null;            // footer totals: the session when the server supports it, else the last conversation
   let registeredModelIds: string[] = [];
   let lastCtx: ExtensionContext | null = null; // most recent context, for the background poll to update the footer
   let serverUp: boolean | null = null;         // last known health; null = never checked
@@ -27,6 +29,15 @@ export default async function (pi: ExtensionAPI) {
   const ourConversations = new Set<string>();  // bedrouter conversation keys seen from this session
 
   const isOurs = (ctx: ExtensionContext) => ctx.model?.provider === settings.providerName;
+  const sessionId = (ctx: ExtensionContext) => { try { return ctx.sessionManager.getSessionId(); } catch { return null; } };
+  /** Whole-session totals from bedrouter (>= 0.3); falls back to the last conversation on older servers. */
+  async function refreshStats(ctx: ExtensionContext): Promise<{ session: br.SessionStats | null; conversation: br.ConversationStats | null }> {
+    const id = sessionId(ctx);
+    const session = id ? await br.session(settings, id) : null;
+    const conversation = !session && last?.conversation ? await br.conversation(settings, last.conversation) : null;
+    stats = session ?? conversation ?? stats;
+    return { session, conversation };
+  }
   const setStatus = (ctx: ExtensionContext, text: string | undefined) => { lastCtx = ctx; if (ctx.hasUI && settings.footer) ctx.ui.setStatus("bedrouter", text); };
   const paint = (ctx: ExtensionContext | null): Paint => (ctx?.hasUI && ctx.ui.theme ? (c, t) => ctx.ui.theme.fg(c, t) : (_c, t) => t);
   const readyText = (ctx: ExtensionContext | null = lastCtx) => statusLine(last, stats, paint(ctx));
@@ -134,6 +145,15 @@ export default async function (pi: ExtensionAPI) {
   });
 
   // ---- live routing display ------------------------------------------------------------------------------------
+  // Tag requests with Pi's session id: bedrouter's conversation key is derived from the system prompt and first user
+  // message, so one Pi session becomes several conversations (compaction, sub-agents, prompt changes) and trivial or
+  // pinned requests are not tracked at all. The session key is what /bedrouter usage and the footer total against.
+  pi.on("before_provider_headers", async (ev, ctx) => {
+    if (!isOurs(ctx)) return;
+    const id = sessionId(ctx);
+    if (id) ev.headers["x-bedrouter-session"] = id;
+  });
+
   pi.on("after_provider_response", async (ev, ctx) => {
     if (!isOurs(ctx)) return;
     const d = fromHeaders(ev.headers ?? {});
@@ -145,8 +165,8 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", async (_ev, ctx) => {
-    if (!isOurs(ctx) || !last?.conversation) return;
-    stats = await br.conversation(settings, last.conversation);
+    if (!isOurs(ctx) || !last) return;
+    await refreshStats(ctx);
     setStatus(ctx, statusLine(last, stats, paint(ctx)));
   });
 
@@ -182,9 +202,9 @@ export default async function (pi: ExtensionAPI) {
   });
 
   // ---- /bedrouter ------------------------------------------------------------------------------------------------
-  const SUB = ["status", "start", "stop", "restart", "install", "doctor", "probe", "report", "log", "models", "fitnotes", "config", "help"];
+  const SUB = ["status", "start", "stop", "restart", "install", "doctor", "probe", "usage", "report", "log", "models", "fitnotes", "config", "help"];
   pi.registerCommand("bedrouter", {
-    description: "bedrouter router: status | start | stop | restart | install | doctor | probe | report | log [n] | models | fitnotes | config",
+    description: "bedrouter router: status | start | stop | restart | install | doctor | probe | usage [all] | report | log [n] | models | fitnotes | config",
     getArgumentCompletions: (prefix) => SUB.filter((s) => s.startsWith(prefix.trim())).map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
       const [sub = "status", ...rest] = args.trim().split(/\s+/).filter(Boolean);
@@ -228,6 +248,20 @@ export default async function (pi: ExtensionAPI) {
           if (sub === "probe") notify(ctx, "bedrouter: probing every rung with a 1-token request…");
           const r = br.run(settings, loc, sub === "probe" ? ["doctor", "--probe"] : ["doctor"]);
           show(`bedrouter ${sub}`, r.out);
+          break;
+        }
+        case "usage": {
+          const h = await br.health(settings);
+          if (!h?.ok) { notify(ctx, `bedrouter is down (${br.baseUrl(settings)}); /bedrouter start`, "error"); break; }
+          const id = sessionId(ctx);
+          if (rest[0] === "all") { show("bedrouter usage: recent sessions on this server", sessionsTable(await br.recentSessions(settings), id ?? undefined)); break; }
+          const { session, conversation } = await refreshStats(ctx);
+          if (session) { show("bedrouter usage: this session", usageReport(session, { sessionId: id ?? undefined })); }
+          else if (conversation) {
+            // older bedrouter: no /v1/sessions; present the last conversation in the same shape
+            show("bedrouter usage: this conversation", usageReport({ ...conversation, errors: 0, conversations: 1, cacheReadTokens: 0, byRoute: conversation.routedModel ? { [`${conversation.requestedModel ?? "?"} -> ${conversation.routedModel}`]: { requests: conversation.requests, costUsd: conversation.costUsd, requestedCostUsd: conversation.requestedCostUsd, inputTokens: conversation.inputTokens, outputTokens: conversation.outputTokens } } : {}, firstTs: conversation.lastTs }, { sessionId: id ?? undefined, conversationOnly: true }));
+          } else show("bedrouter usage", isOurs(ctx) ? `nothing routed yet in this session (${id ?? "no session id"})` : `this session is not using bedrouter (model ${ctx.model?.provider}/${ctx.model?.id}); pick bedrouter/auto with /model`);
+          if (isOurs(ctx) && last) setStatus(ctx, statusLine(last, stats, paint(ctx)));
           break;
         }
         case "report": {

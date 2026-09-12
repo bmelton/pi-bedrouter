@@ -7,6 +7,7 @@ A [Pi](https://pi.dev) extension for [bedrouter](https://github.com/bmelton/bedr
 - **registers a `bedrouter` provider** in Pi whose models come straight from `bedrouter.json`: the `auto` aliases (the router decides everything) plus each rung of each ladder
 - **switches the session to `bedrouter/auto`** when the server is healthy, so nobody has to pick a model
 - **shows what served each request in the footer**, live: routed model vs requested, class and deciding signal, the classifier's note, and the session's running cost against what the requested model would have cost
+- **totals the whole session**: every request carries Pi's session id (`x-bedrouter-session`), so bedrouter can add up the session across conversation keys, compaction and sub-agent calls; `/bedrouter usage` shows spend, what the asked-for model would have cost, and the breakdown by route
 - **`/bedrouter`** for everything else: status, start/stop/restart, doctor and the per-rung entitlement probe, the savings report, the last N decisions, pi-agents fit notes
 
 ```
@@ -57,7 +58,8 @@ Example for a developer with a checkout:
 | `/bedrouter install` | `npm install` the dependency, or `npm run build` a checkout that has no `dist/` |
 | `/bedrouter doctor` | Which credential source resolved, expiry, the loaded ladder |
 | `/bedrouter probe` | One 1-token request per rung: which models this AWS account can actually invoke |
-| `/bedrouter report [--since t] [--json]` | Savings report over the decision log |
+| `/bedrouter usage` | This Pi session so far: requests, tokens, spend (models + classifier), what the asked-for model would have cost, saved/over, and a per-route table. Whole-session totals need bedrouter ≥ 0.3; against an older server it shows the current conversation and says so. `usage all` lists recent sessions on the server (`*` marks this one) |
+| `/bedrouter report [--since t] [--session key] [--json]` | Savings report over the decision log (all clients, all sessions; `--session` narrows it to one) |
 | `/bedrouter log [n]` | The last n routing decisions, one line each |
 | `/bedrouter models` | Re-read `bedrouter.json` and re-register the provider (after editing the ladder) |
 | `/bedrouter fitnotes` | Merge model notes into `~/.pi/agent/workflows.json` so the pi-agents planner defaults to `bedrouter/auto` and only pins premium rungs for planning/review |
@@ -65,7 +67,7 @@ Example for a developer with a checkout:
 
 ## How the footer works
 
-Bedrouter echoes every routing decision in response headers (`x-bedrouter-model`, `-requested`, `-class`, `-reason`, `-conversation`, `-classifier`). Pi hands extensions those headers in the `after_provider_response` event, so the status line updates the moment a response starts, before any tokens stream. When the turn ends, the extension asks bedrouter for the conversation's running totals (`GET /v1/conversations/:key`) and appends cost: spend so far, then the routing effect against what the same tokens would have cost on the model the client asked for: `saved $x (n%)`, `same as asked-for`, or `+$x over asked-for (routed up)` when the router chose a stronger rung. The classifier's one-off call is shown separately (`classifier $0.0004`) rather than counted against routing. `↑n` counts escalations in this conversation. The line clears when you switch to a non-bedrouter model. A background health check (every `healthPollS` seconds) keeps it honest between turns: if the server dies the line reads `bedrouter: DOWN` and, with `autoStart` on, the extension restarts it and says so.
+Bedrouter echoes every routing decision in response headers (`x-bedrouter-model`, `-requested`, `-class`, `-reason`, `-conversation`, `-classifier`). Pi hands extensions those headers in the `after_provider_response` event, so the status line updates the moment a response starts, before any tokens stream. When the turn ends, the extension asks bedrouter for the session's running totals (`GET /v1/sessions/:id`, keyed by the Pi session id the extension sends on every request as `x-bedrouter-session`; on a bedrouter older than 0.3 it falls back to the current conversation, `GET /v1/conversations/:key`) and appends cost: spend so far, then the routing effect against what the same tokens would have cost on the model the client asked for: `saved $x (n%)`, `same as asked-for`, or `+$x over asked-for (routed up)` when the router chose a stronger rung. The classifier's one-off call is shown separately (`classifier $0.0004`) rather than counted against routing. `↑n` counts escalations in this session. The line clears when you switch to a non-bedrouter model. A background health check (every `healthPollS` seconds) keeps it honest between turns: if the server dies the line reads `bedrouter: DOWN` and, with `autoStart` on, the extension restarts it and says so.
 
 Under a coding agent every request carries tools and a large system prompt, so you will see `execute` and `explore` decided by keywords or the classifier, then `sticky` for the rest of the session, `up:kw:explore` when an explicit design question moves the conversation up, and escalations after failures. `trivial` shows up for bare chat clients, not for Pi.
 

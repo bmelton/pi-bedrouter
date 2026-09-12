@@ -8,6 +8,8 @@ import type { Settings } from "./settings.js";
 
 export type Health = { ok: boolean; region: string; pid: number; version: string; routing: boolean; classifier: string | null; uptimeS: number };
 export type ConversationStats = { key: string; requests: number; costUsd: number; requestedCostUsd: number; classifierCostUsd: number; inputTokens: number; outputTokens: number; escalations: number; class: string | null; routedModel: string | null; requestedModel: string | null; lastTs: string };
+/** Per-session totals from GET /v1/sessions/:key (bedrouter >= 0.3): every request this Pi session sent, across conversations. */
+export type SessionStats = { key: string; requests: number; errors: number; conversations: number; costUsd: number; requestedCostUsd: number; classifierCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; escalations: number; byRoute: Record<string, { requests: number; costUsd: number; requestedCostUsd: number; inputTokens: number; outputTokens: number }>; firstTs: string; lastTs: string };
 export type Rung = { alias: string; bedrockId: string; inputPerM: number; outputPerM: number };
 export type BedrouterConfig = { families: Record<string, Rung[]>; aliases?: Record<string, string>; routing?: { enabled?: boolean; classes?: Record<string, Record<string, string>>; classifier?: { enabled?: boolean; model?: string } } };
 
@@ -124,6 +126,8 @@ export const FALLBACK_CONFIG: BedrouterConfig = {
   routing: { classes: { anthropic: { trivial: "haiku", execute: "sonnet", explore: "opus" }, openai: { execute: "gpt-oss-20b", explore: "gpt-oss-120b" } } },
 };
 export const conversation = (s: Settings, key: string) => getJson<ConversationStats>(`${baseUrl(s)}/v1/conversations/${key}`);
+export const session = (s: Settings, key: string) => getJson<SessionStats>(`${baseUrl(s)}/v1/sessions/${encodeURIComponent(key)}`);
+export const recentSessions = async (s: Settings) => (await getJson<{ data: SessionStats[] }>(`${baseUrl(s)}/v1/sessions`))?.data ?? [];
 export const recentConversations = async (s: Settings) => (await getJson<{ data: ConversationStats[] }>(`${baseUrl(s)}/v1/conversations`))?.data ?? [];
 
 /** True when a conversation other than `ours` sent a request within `windowMs`: another client is using the server. */
