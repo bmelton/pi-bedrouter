@@ -13,7 +13,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadSettings, saveSettings, settingsPath, agentDir, type Settings } from "../src/settings.js";
 import * as br from "../src/bedrouter.js";
 import { fitNotes, piModels } from "../src/models.js";
-import { fromHeaders, statusLine, type LastDecision } from "../src/footer.js";
+import { downLine, fromHeaders, readyLine, restartingLine, statusLine, type LastDecision, type Paint } from "../src/footer.js";
 
 export default async function (pi: ExtensionAPI) {
   let settings = loadSettings();
@@ -28,7 +28,8 @@ export default async function (pi: ExtensionAPI) {
 
   const isOurs = (ctx: ExtensionContext) => ctx.model?.provider === settings.providerName;
   const setStatus = (ctx: ExtensionContext, text: string | undefined) => { lastCtx = ctx; if (ctx.hasUI && settings.footer) ctx.ui.setStatus("bedrouter", text); };
-  const readyText = () => statusLine(last, stats);
+  const paint = (ctx: ExtensionContext | null): Paint => (ctx?.hasUI && ctx.ui.theme ? (c, t) => ctx.ui.theme.fg(c, t) : (_c, t) => t);
+  const readyText = (ctx: ExtensionContext | null = lastCtx) => statusLine(last, stats, paint(ctx));
   const notify = (ctx: ExtensionContext, msg: string, type: "info" | "warning" | "error" = "info") => { if (ctx.hasUI) ctx.ui.notify(msg, type); };
   /** Show multi-line output (doctor/report/log) as a visible message without adding it to the model's context. */
   const show = (title: string, body: string) => pi.sendMessage({ customType: "bedrouter", content: `**${title}**\n\n\`\`\`\n${body}\n\`\`\``, display: true }, { triggerTurn: false });
@@ -112,23 +113,23 @@ export default async function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (ev, ctx) => {
     lastCtx = ctx;
-    if (ev.reason !== "startup" && ev.reason !== "new") { if (isOurs(ctx)) setStatus(ctx, statusLine(last, stats)); return; }
+    if (ev.reason !== "startup" && ev.reason !== "new") { if (isOurs(ctx)) setStatus(ctx, statusLine(last, stats, paint(ctx))); return; }
     last = null; stats = null;
     const h = await br.health(settings);
     serverUp = !!h?.ok;
     if (!h?.ok && settings.autoStart) {
       const r = await bringUp(ctx, { install: true, start: true });
       serverUp = r.ok;
-      if (!r.ok) { notify(ctx, `bedrouter: ${r.lines[r.lines.length - 1]}`, "warning"); setStatus(ctx, "bedrouter: DOWN · /bedrouter start"); return; }
+      if (!r.ok) { notify(ctx, `bedrouter: ${r.lines[r.lines.length - 1]}`, "warning"); setStatus(ctx, downLine("/bedrouter start", paint(ctx))); return; }
       const created = r.lines.filter((l) => l.startsWith("created "));
       if (created.length) notify(ctx, created.join("\n"), "warning");
-    } else if (!h?.ok) { setStatus(ctx, "bedrouter: DOWN · /bedrouter start"); return; }
+    } else if (!h?.ok) { setStatus(ctx, downLine("/bedrouter start", paint(ctx))); return; }
     await autoSelect(ctx);
-    if (isOurs(ctx)) setStatus(ctx, "bedrouter: ready");
+    if (isOurs(ctx)) setStatus(ctx, readyText(ctx));
   });
 
   pi.on("model_select", async (ev, ctx) => {
-    if (ev.model.provider === settings.providerName) setStatus(ctx, statusLine(last, stats));
+    if (ev.model.provider === settings.providerName) setStatus(ctx, statusLine(last, stats, paint(ctx)));
     else setStatus(ctx, undefined);
   });
 
@@ -140,13 +141,13 @@ export default async function (pi: ExtensionAPI) {
     last = d;
     serverUp = true;
     if (d.conversation) ourConversations.add(d.conversation);
-    setStatus(ctx, statusLine(last, stats));
+    setStatus(ctx, statusLine(last, stats, paint(ctx)));
   });
 
   pi.on("agent_end", async (_ev, ctx) => {
     if (!isOurs(ctx) || !last?.conversation) return;
     stats = await br.conversation(settings, last.conversation);
-    setStatus(ctx, statusLine(last, stats));
+    setStatus(ctx, statusLine(last, stats, paint(ctx)));
   });
 
   // ---- background health poll ----------------------------------------------------------------------------------
@@ -160,14 +161,14 @@ export default async function (pi: ExtensionAPI) {
     if (up === serverUp) return;
     serverUp = up;
     if (up) { setStatus(ctx, readyText()); if (last) notify(ctx, "bedrouter: back up"); return; }
-    setStatus(ctx, "bedrouter: DOWN" + (settings.autoStart ? " · restarting…" : " · /bedrouter start"));
+    setStatus(ctx, settings.autoStart ? restartingLine(paint(ctx)) : downLine("/bedrouter start", paint(ctx)));
     if (!settings.autoStart || Date.now() - restartAttemptAt < 60_000) return;
     restartAttemptAt = Date.now();
     // same path as startup: locate, build/install if needed, start
     const r = await bringUp(ctx, { install: true, start: true });
     serverUp = r.ok;
     if (r.ok) { setStatus(ctx, readyText()); notify(ctx, `bedrouter: restarted`); }
-    else { setStatus(ctx, "bedrouter: DOWN · /bedrouter start"); notify(ctx, `bedrouter: restart failed — ${r.lines[r.lines.length - 1].split("\n")[0]}`, "warning"); }
+    else { setStatus(ctx, downLine("/bedrouter start", paint(ctx))); notify(ctx, `bedrouter: restart failed — ${r.lines[r.lines.length - 1].split("\n")[0]}`, "warning"); }
   }
   if (settings.healthPollS > 0) { poll = setInterval(() => void checkHealth(), settings.healthPollS * 1000); poll.unref(); }
 
@@ -212,10 +213,10 @@ export default async function (pi: ExtensionAPI) {
           const r = await bringUp(ctx, { install: false, start: true });
           show(`bedrouter ${sub}`, r.lines.join("\n"));
           serverUp = r.ok;
-          if (r.ok) { await autoSelect(ctx); setStatus(ctx, isOurs(ctx) ? readyText() : undefined); }
+          if (r.ok) { await autoSelect(ctx); setStatus(ctx, isOurs(ctx) ? readyText(ctx) : undefined); }
           break;
         }
-        case "stop": notify(ctx, await br.stop(settings)); serverUp = false; setStatus(ctx, isOurs(ctx) ? "bedrouter: DOWN · /bedrouter start" : undefined); break;
+        case "stop": notify(ctx, await br.stop(settings)); serverUp = false; setStatus(ctx, isOurs(ctx) ? downLine("/bedrouter start", paint(ctx)) : undefined); break;
         case "install": {
           notify(ctx, "bedrouter: installing/building (this can take a minute)…");
           const r = await bringUp(ctx, { install: true, start: false });

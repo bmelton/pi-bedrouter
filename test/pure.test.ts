@@ -34,13 +34,17 @@ test("footer: headers → decision → status line, with and without stats", () 
   assert.equal(fromHeaders({ "content-type": "text/event-stream" }), null);
   const d = fromHeaders({ "X-Bedrouter-Model": "gpt-oss-120b", "x-bedrouter-requested": "gpt-oss-20b", "x-bedrouter-class": "explore", "x-bedrouter-reason": "classifier:explore", "x-bedrouter-conversation": "abc", "x-bedrouter-classifier": "open-ended" })!;
   assert.deepEqual([d.model, d.requested, d.cls, d.reason, d.conversation, d.classifier], ["gpt-oss-120b", "gpt-oss-20b", "explore", "classifier:explore", "abc", "open-ended"]);
-  assert.equal(statusLine(null, null), "bedrouter: ready");
-  assert.equal(statusLine(d, null), "⇄ gpt-oss-120b ≠ gpt-oss-20b  explore·clf:explore");
+  const NB = "\u00a0\u00a0";
+  assert.equal(statusLine(null, null), `│ ✓ bedrouter ready${NB}`);
+  assert.equal(statusLine(d, null), `│ ✓ bedrouter ⇄ gpt-oss-120b ≠ gpt-oss-20b  explore·clf:explore${NB}`);
   const saved = statusLine({ ...d, model: "gpt-oss-20b", requested: "gpt-oss-20b", reason: "keyword:execute", cls: "execute" }, { key: "abc", requests: 4, costUsd: 0.01, requestedCostUsd: 0.02, classifierCostUsd: 0.0005, inputTokens: 1, outputTokens: 1, escalations: 1, class: "execute", routedModel: "gpt-oss-20b", requestedModel: "gpt-oss-20b", lastTs: "" });
-  assert.equal(saved, "⇄ gpt-oss-20b = gpt-oss-20b  execute·kw:execute  $0.0105 · saved $0.0100 (50%), classifier $0.0005  ↑1");
+  assert.equal(saved, `│ ✓ bedrouter ⇄ gpt-oss-20b = gpt-oss-20b  execute·kw:execute  $0.0105 · saved $0.0100 (50%), classifier $0.0005  ↑1${NB}`);
   const over = statusLine(d, { key: "abc", requests: 1, costUsd: 0.03, requestedCostUsd: 0.01, classifierCostUsd: 0, inputTokens: 1, outputTokens: 1, escalations: 0, class: "explore", routedModel: "gpt-oss-120b", requestedModel: "gpt-oss-20b", lastTs: "" });
-  assert.match(over, /\+\$0\.0200 over asked-for \(routed up\)$/);
+  assert.match(over, /\+\$0\.0200 over asked-for \(routed up\)\u00a0\u00a0$/);
   // break-even session: same model as asked for, only the classifier's one-off call on top -> never reported as "over"
   const even = statusLine({ ...d, model: "gpt-oss-20b", requested: "gpt-oss-20b", cls: "execute", reason: "sticky" }, { key: "abc", requests: 3, costUsd: 0.0024, requestedCostUsd: 0.0024, classifierCostUsd: 0.0004, inputTokens: 1, outputTokens: 1, escalations: 0, class: "execute", routedModel: "gpt-oss-20b", requestedModel: "gpt-oss-20b", lastTs: "" });
-  assert.equal(even, "⇄ gpt-oss-20b = gpt-oss-20b  execute·sticky  $0.0028 · same as asked-for, classifier $0.0004");
+  assert.equal(even, `│ ✓ bedrouter ⇄ gpt-oss-20b = gpt-oss-20b  execute·sticky  $0.0028 · same as asked-for, classifier $0.0004${NB}`);
+  // painted: the check mark and bar carry theme colours, the text does not
+  const painted = statusLine(null, null, (c, t) => `<${c}>${t}</${c}>`);
+  assert.equal(painted, `<dim>│</dim> <success>✓</success> bedrouter ready${NB}`);
 });
