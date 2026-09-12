@@ -19,9 +19,16 @@ export function statusLine(d: LastDecision | null, c: ConversationStats | null):
   let s = `⇄ ${d.model} ${arrow} ${d.requested}  ${d.cls}·${short(d.reason)}`;
   if (c && c.requests > 0) {
     const spend = c.costUsd + c.classifierCostUsd;
-    const diff = c.requestedCostUsd - spend;
+    // Routing effect = model cost vs the same tokens on the asked-for model. The classifier's one-off call is overhead
+    // and shown as such, never folded into "over asked-for" (which would flag every break-even session as a loss).
+    const diff = c.requestedCostUsd - c.costUsd;
     const pct = c.requestedCostUsd > 0 ? Math.round((diff / c.requestedCostUsd) * 100) : 0;
-    s += `  ${usd(spend)}${diff >= 0 ? ` saved ${usd(diff)} (${pct}%)` : ` +${usd(-diff)} over asked-for`}${c.escalations ? `  ↑${c.escalations}` : ""}`;
+    const clf = c.classifierCostUsd > 0 ? `, classifier ${usd(c.classifierCostUsd)}` : "";
+    let verdict: string;
+    if (Math.abs(diff) < 1e-6) verdict = `same as asked-for${clf}`;
+    else if (diff > 0) verdict = `saved ${usd(diff)} (${pct}%)${clf}`;
+    else verdict = `+${usd(-diff)} over asked-for (routed up)${clf}`;
+    s += `  ${usd(spend)} · ${verdict}${c.escalations ? `  ↑${c.escalations}` : ""}`;
   }
   return s;
 }

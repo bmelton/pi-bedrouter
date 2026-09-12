@@ -1,6 +1,6 @@
 {
   "name": "pi-bedrouter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pi extension for bedrouter: starts the cost-aware Bedrock model router, registers it as a provider, and shows which model served each request",
   "keywords": [
     "pi-package",
