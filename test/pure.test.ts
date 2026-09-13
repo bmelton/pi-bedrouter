@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { piModels, fitNotes } from "../src/models.js";
 import { fromHeaders, sessionsTable, statusLine, usageReport } from "../src/footer.js";
 import { launchedWithExplicitModel, wantsUs } from "../src/selection.js";
+import type { BedrouterConfig } from "../src/bedrouter.js";
 
 test("explicit provider/model detection stops at -- and does not match --models", () => {
   assert.equal(launchedWithExplicitModel(["--model", "x"]), true);
@@ -25,30 +26,29 @@ test("bedrouter auto-selection respects argv, defaultProvider, and the environme
 });
 
 const cfg = {
-  families: {
-    anthropic: [{ alias: "haiku", bedrockId: "h", inputPerM: 1.1, outputPerM: 5.5 }, { alias: "sonnet", bedrockId: "s", inputPerM: 2.2, outputPerM: 11 }, { alias: "opus", bedrockId: "o", inputPerM: 5.5, outputPerM: 27.5 }],
-    openai: [{ alias: "gpt-oss-20b", bedrockId: "g20", inputPerM: 0.07, outputPerM: 0.2 }, { alias: "gpt-oss-120b", bedrockId: "g120", inputPerM: 0.15, outputPerM: 0.6 }],
-  },
-  aliases: { auto: "auto:anthropic", "auto-oss": "auto:openai", "claude-sonnet-5": "sonnet" },
-  routing: { classes: { anthropic: { trivial: "haiku", execute: "sonnet", explore: "opus" }, openai: { execute: "gpt-oss-20b", explore: "gpt-oss-120b" } } },
-};
+  stack: [
+    { alias:"tiny",bedrockId:"t",vendor:"amazon",enabled:true,inputPerM:.1,outputPerM:.2,serves:["trivial"],capabilities:{transport:"bedrock-runtime",api:"converse",toolUse:true,streaming:true,imageInput:false,structuredOutputs:false,promptCaching:true,contextWindow:1000,maxOutput:100}},
+    { alias:"work",bedrockId:"w",vendor:"openai",enabled:true,inputPerM:.2,outputPerM:.4,serves:["execute"],capabilities:{transport:"bedrock-runtime",api:"converse",toolUse:true,streaming:true,imageInput:false,structuredOutputs:true,promptCaching:false,contextWindow:2000,maxOutput:200}},
+    { alias:"deep",bedrockId:"d",vendor:"anthropic",enabled:true,inputPerM:1,outputPerM:5,serves:["execute","explore"],capabilities:{transport:"bedrock-runtime",api:"converse",toolUse:true,streaming:true,imageInput:true,structuredOutputs:false,promptCaching:true,contextWindow:10000,maxOutput:1000}}
+  ]
+} satisfies BedrouterConfig;
 
-test("piModels: auto aliases first, per-family api and baseUrl, full cost object, client aliases omitted", () => {
+test("piModels: one auto model and each enabled rung use the stack capability block", () => {
   const ms = piModels(cfg, "http://127.0.0.1:20129");
-  assert.deepEqual(ms.map((m) => m.id), ["auto", "auto-oss", "haiku", "sonnet", "opus", "gpt-oss-20b", "gpt-oss-120b"]);
-  const auto = ms[0], oss = ms[1];
-  assert.deepEqual([auto.api, auto.baseUrl, auto.input, auto.cost], ["anthropic-messages", "http://127.0.0.1:20129", ["text", "image"], { input: 2.2, output: 11, cacheRead: 0.22, cacheWrite: 2.75 }]);
-  assert.deepEqual([oss.api, oss.baseUrl, oss.input], ["openai-completions", "http://127.0.0.1:20129/v1", ["text"]]);
-  assert.match(auto.name, /haiku → sonnet → opus/);
+  assert.deepEqual(ms.map((m) => m.id), ["auto", "tiny", "work", "deep"]);
+  const auto = ms[0], deep = ms[3];
+  assert.deepEqual([auto.api, auto.baseUrl, auto.input, auto.contextWindow, auto.maxTokens], ["openai-completions", "http://127.0.0.1:20129/v1", ["text", "image"], 10000, 1000]);
+  assert.deepEqual(deep.input, ["text", "image"]);
+  assert.match(auto.name, /tiny → work → deep/);
   for (const m of ms) assert.ok(m.cost.cacheRead >= 0 && m.cost.cacheWrite >= 0 && m.contextWindow > 0 && m.maxTokens > 0 && m.reasoning === true);
 });
 
-test("fitNotes: auto is the default, rungs annotated by class", () => {
+test("fitNotes derive from serves", () => {
   const n = fitNotes(cfg, "bedrouter");
   assert.match(n["bedrouter/auto"], /default for every node/);
-  assert.match(n["bedrouter/opus"], /planning, final review/);
-  assert.match(n["bedrouter/haiku"], /titles/);
-  assert.match(n["bedrouter/gpt-oss-20b"], /implementation/);
+  assert.match(n["bedrouter/deep"], /planning or final review/);
+  assert.match(n["bedrouter/tiny"], /titles/);
+  assert.match(n["bedrouter/work"], /implementation/);
 });
 
 test("footer: headers → decision → status line, with and without stats", () => {

@@ -48,24 +48,24 @@ export async function activate(pi: ExtensionAPI, runtime: typeof br = br) {
 
   /**
    * Register (or re-register) the provider. Source, in order: the running server's /v1/models (always right for the
-   * ladder that is actually serving), then bedrouter.json (home dir, then the checkout), then the shipped default.
+   * stack that is actually serving), then bedrouter.json (home dir, then the checkout), then the shipped default.
    */
   async function registerProvider(loc: br.Found | null): Promise<string> {
     let cfg: br.BedrouterConfig | null = null;
     let source = "";
     const live = await runtime.liveConfig(settings);
-    if (live && Object.keys(live.families).length) { cfg = live; source = `${br.baseUrl(settings)}/v1/models`; }
+    if (live?.stack.length) { cfg = live; source = `${br.baseUrl(settings)}/v1/models`; }
     if (!cfg) {
       const file = runtime.readConfig(settings, loc);
       if ("config" in file) { cfg = file.config; source = file.path; }
     }
-    if (!cfg) { cfg = runtime.FALLBACK_CONFIG; source = "built-in default ladder (no server, no bedrouter.json yet)"; }
+    if (!cfg) { cfg = runtime.FALLBACK_CONFIG; source = "built-in default stack (no server, no bedrouter.json yet)"; }
     const models = piModels(cfg, br.baseUrl(settings));
     pi.registerProvider(settings.providerName, {
       name: "bedrouter (Bedrock, routed)",
       baseUrl: br.baseUrl(settings),
       apiKey: process.env.BEDROUTER_API_KEY || "bedrouter",
-      api: "anthropic-messages",
+      api: "openai-completions",
       models,
     });
     registeredModelIds = models.map((m) => m.id);
@@ -95,7 +95,7 @@ export async function activate(pi: ExtensionAPI, runtime: typeof br = br) {
     if (opts.start) {
       const before = await runtime.health(settings);
       const r = await runtime.start(settings, loc as br.Found);
-      for (const f of r.created) lines.push(`created ${f} from the example; edit it for this machine (AWS_PROFILE, ladder)`);
+      for (const f of r.created) lines.push(`created ${f} from the example; edit it for this machine (AWS_PROFILE, stack)`);
       if (r.ok) {
         if (!before?.ok) startedHere = true;
         lines.push(`bedrouter ${r.health.version} up on ${br.baseUrl(settings)} (pid ${r.health.pid}, region ${r.health.region}, classifier ${r.health.classifier ?? "off"})${!before?.ok ? `; started by this session, on quit: ${exitPolicyText()}` : "; was already running (not started here, left alone on quit)"}`);
@@ -312,7 +312,7 @@ export async function activate(pi: ExtensionAPI, runtime: typeof br = br) {
           break;
         }
         default:
-          show("bedrouter", `/bedrouter ${SUB.join(" | ")}\n\nstatus    install, server, provider, current model, last decision\nstart     start the server if needed (seeds .env / bedrouter.json on first run)\nstop      stop the server (shared by all Pi sessions)\ninstall   npm install / build the bedrouter dependency\ndoctor    credential source + loaded ladder;  probe: 1-token call per rung\nreport    savings report over the decision log (args pass through: --since, --json)\nlog [n]   last n routing decisions\nmodels    re-read bedrouter.json and re-register the provider\nfitnotes  write pi-agents model notes so the planner defaults to the router\nconfig    show/create ${settingsPath()}`);
+          show("bedrouter", `/bedrouter ${SUB.join(" | ")}\n\nstatus    install, server, provider, current model, last decision\nstart     start the server if needed (seeds .env / bedrouter.json on first run)\nstop      stop the server (shared by all Pi sessions)\ninstall   npm install / build the bedrouter dependency\ndoctor    credential source + loaded stack;  probe: 1-token call per rung\nreport    savings report over the decision log (args pass through: --since, --json)\nlog [n]   last n routing decisions\nmodels    re-read bedrouter.json and re-register the provider\nfitnotes  write pi-agents model notes so the planner defaults to the router\nconfig    show/create ${settingsPath()}`);
       }
     },
   });

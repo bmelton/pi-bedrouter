@@ -10,8 +10,9 @@ export type Health = { ok: boolean; region: string; pid: number; version: string
 export type ConversationStats = { key: string; requests: number; costUsd: number; requestedCostUsd: number; classifierCostUsd: number; inputTokens: number; outputTokens: number; escalations: number; class: string | null; routedModel: string | null; requestedModel: string | null; lastTs: string };
 /** Per-session totals from GET /v1/sessions/:key (bedrouter >= 0.3): every request this Pi session sent, across conversations. */
 export type SessionStats = { key: string; requests: number; errors: number; conversations: number; costUsd: number; requestedCostUsd: number; classifierCostUsd: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; escalations: number; byRoute: Record<string, { requests: number; costUsd: number; requestedCostUsd: number; inputTokens: number; outputTokens: number }>; firstTs: string; lastTs: string };
-export type Rung = { alias: string; bedrockId: string; inputPerM: number; outputPerM: number };
-export type BedrouterConfig = { families: Record<string, Rung[]>; aliases?: Record<string, string>; routing?: { enabled?: boolean; classes?: Record<string, Record<string, string>>; classifier?: { enabled?: boolean; model?: string } } };
+export type Capabilities = { transport: "bedrock-runtime"; api: "converse"; toolUse: boolean; streaming: boolean; imageInput: boolean; structuredOutputs: boolean; promptCaching: boolean; contextWindow: number; maxOutput: number };
+export type Rung = { alias: string; bedrockId: string; vendor: string; enabled: boolean; inputPerM: number; outputPerM: number; serves: ("trivial" | "execute" | "explore")[]; capabilities: Capabilities };
+export type BedrouterConfig = { stack: Rung[]; aliases?: Record<string, string>; routing?: { enabled?: boolean; classifier?: { enabled?: boolean; model?: string } } };
 
 export type Found = { found: true; dir: string; cli: string | null; source: "settings.path" | "dependency"; version: string };
 export type Install = Found | { found: false; reason: string; installCmd: string };
@@ -91,39 +92,28 @@ export const health = (s: Settings) => getJson<Health>(`${baseUrl(s)}/health`);
 
 /** Reconstruct a BedrouterConfig from a running server's /v1/models, so the provider can be registered with no local files. */
 export async function liveConfig(s: Settings): Promise<BedrouterConfig | null> {
-  type M = { id: string; bedrock_id: string; bedrouter?: { family: string; rung: string; auto: boolean; inputPerM: number; outputPerM: number } };
+  type M = { id: string; bedrock_id: string; bedrouter?: Omit<Rung, "alias" | "bedrockId"> & { rung: string; auto: boolean } };
   const r = await getJson<{ data: M[] }>(`${baseUrl(s)}/v1/models`);
   if (!r?.data) return null;
-  const families: Record<string, Rung[]> = {};
+  const stack: Rung[] = [];
   const aliases: Record<string, string> = {};
   for (const m of r.data) {
     const b = m.bedrouter;
     if (!b) continue;
-    if (b.auto) { aliases[m.id] = `auto:${b.family}`; continue; }
-    const fam = (families[b.family] ??= []);
-    if (m.id === b.rung) { if (!fam.some((x) => x.alias === b.rung)) fam.push({ alias: b.rung, bedrockId: m.bedrock_id, inputPerM: b.inputPerM, outputPerM: b.outputPerM }); }
+    if (b.auto) continue;
+    if (m.id === b.rung && !stack.some((x) => x.alias === b.rung)) stack.push({ alias: b.rung, bedrockId: m.bedrock_id, vendor: b.vendor, enabled: b.enabled, serves: b.serves, capabilities: b.capabilities, inputPerM: b.inputPerM, outputPerM: b.outputPerM });
     else aliases[m.id] = b.rung;
   }
-  // /v1/models is a map, so ladder order is lost; restore cheapest-first by input price (what bedrouter's ladders are)
-  for (const fam of Object.values(families)) fam.sort((a, b) => a.inputPerM - b.inputPerM);
-  return { families, aliases };
+  return { stack, aliases };
 }
 
-/** Last resort when neither a server nor a config file is available: the shipped example ladder. */
+/** Last resort when neither a server nor a config file is available. */
 export const FALLBACK_CONFIG: BedrouterConfig = {
-  families: {
-    anthropic: [
-      { alias: "haiku", bedrockId: "us.anthropic.claude-haiku-4-5-20251001-v1:0", inputPerM: 1.1, outputPerM: 5.5 },
-      { alias: "sonnet", bedrockId: "us.anthropic.claude-sonnet-5", inputPerM: 2.2, outputPerM: 11 },
-      { alias: "opus", bedrockId: "us.anthropic.claude-opus-5", inputPerM: 5.5, outputPerM: 27.5 },
-    ],
-    openai: [
-      { alias: "gpt-oss-20b", bedrockId: "openai.gpt-oss-20b-1:0", inputPerM: 0.07, outputPerM: 0.2 },
-      { alias: "gpt-oss-120b", bedrockId: "openai.gpt-oss-120b-1:0", inputPerM: 0.15, outputPerM: 0.6 },
-    ],
-  },
-  aliases: { auto: "auto:anthropic", "auto-oss": "auto:openai" },
-  routing: { classes: { anthropic: { trivial: "haiku", execute: "sonnet", explore: "opus" }, openai: { execute: "gpt-oss-20b", explore: "gpt-oss-120b" } } },
+  stack: [
+    { alias:"nova-micro",bedrockId:"us.amazon.nova-micro-v1:0",vendor:"amazon",enabled:true,inputPerM:.035,outputPerM:.14,serves:["trivial"],capabilities:{transport:"bedrock-runtime",api:"converse",toolUse:true,streaming:true,imageInput:false,structuredOutputs:false,promptCaching:true,contextWindow:128000,maxOutput:5000}},
+    { alias:"gpt-oss-120b",bedrockId:"openai.gpt-oss-120b-1:0",vendor:"openai",enabled:true,inputPerM:.15,outputPerM:.6,serves:["execute"],capabilities:{transport:"bedrock-runtime",api:"converse",toolUse:true,streaming:true,imageInput:false,structuredOutputs:true,promptCaching:false,contextWindow:128000,maxOutput:16000}},
+    { alias:"glm-5",bedrockId:"zai.glm-5",vendor:"zai",enabled:true,inputPerM:1,outputPerM:3.2,serves:["execute","explore"],capabilities:{transport:"bedrock-runtime",api:"converse",toolUse:false,streaming:true,imageInput:false,structuredOutputs:true,promptCaching:false,contextWindow:200000,maxOutput:128000}}
+  ]
 };
 export const conversation = (s: Settings, key: string) => getJson<ConversationStats>(`${baseUrl(s)}/v1/conversations/${key}`);
 export const session = (s: Settings, key: string) => getJson<SessionStats>(`${baseUrl(s)}/v1/sessions/${encodeURIComponent(key)}`);

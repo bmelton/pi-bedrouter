@@ -4,7 +4,7 @@ A [Pi](https://pi.dev) extension for [bedrouter](https://github.com/bmelton/bedr
 
 - **finds bedrouter** (a configured checkout, or the npm dependency this package ships with) and installs or builds it when it is missing
 - **starts the server** when it is not already running, seeding `.env` and `bedrouter.json` from bedrouter's examples on first run
-- **registers a `bedrouter` provider** in Pi whose models come straight from `bedrouter.json`: the `auto` aliases (the router decides everything) plus each rung of each ladder
+- **registers a `bedrouter` provider** in Pi whose models come straight from `bedrouter.json`: one `auto` model plus each enabled rung in the stack
 - **switches the session to `bedrouter/auto`** when the server is healthy, so nobody has to pick a model
 - **shows what served each request in the footer**, live: routed model vs requested, class and deciding signal, the classifier's note, and the session's running cost against what the requested model would have cost
 - **totals the whole session**: every request carries Pi's session id (`x-bedrouter-session`), so bedrouter can add up the session across conversation keys, compaction and sub-agent calls; `/bedrouter usage` shows spend, what the asked-for model would have cost, and the breakdown by route
@@ -36,7 +36,7 @@ Bedrouter needs AWS credentials that can call Bedrock; see its README for the `a
 | `home` | `path` if set, else `~/.bedrouter` | Working directory for the server: `.env`, `bedrouter.json`, `bedrouter.log.jsonl`, `server.log` |
 | `port` | `20129` | Port to run / expect the server on (`BEDROUTER_PORT` overrides) |
 | `autoStart` | `true` | Start the server on session start when it is not running |
-| `autoSelect` | `"auto"` | Model id to switch the session to when bedrouter is healthy (`"auto"`, `"auto-oss"`, a rung alias, or `false` to leave the model alone) |
+| `autoSelect` | `"auto"` | Model id to select when no higher-precedence choice exists (`"auto"`, a rung alias, or `false` to leave the model alone) |
 | `debug` | `false` | Start the server with `BEDROUTER_DEBUG=1` (per-request trace in `server.log`) |
 | `footer` | `true` | Show the routing status line in Pi's footer |
 | `providerName` | `"bedrouter"` | Provider name registered in Pi |
@@ -46,7 +46,7 @@ Bedrouter needs AWS credentials that can call Bedrock; see its README for the `a
 Example for a developer with a checkout:
 
 ```json
-{ "path": "~/projects/ai/bedrouter", "autoSelect": "auto-oss" }
+{ "path": "~/projects/ai/bedrouter", "autoSelect": "auto" }
 ```
 
 Automatic selection applies only when the session did not name a provider or
@@ -65,12 +65,12 @@ later switch to `bedrouter/*` still work; switching later starts the server when
 | `/bedrouter` or `/bedrouter status` | Install location, server health (pid, version, region, classifier), registered models, current model, last decision |
 | `/bedrouter start` / `stop` / `restart` | Manage the server. It is shared by every Pi session, so `stop` affects all of them; see `stopOnExit` for what happens when Pi quits |
 | `/bedrouter install` | `npm install` the dependency, or `npm run build` a checkout that has no `dist/` |
-| `/bedrouter doctor` | Which credential source resolved, expiry, the loaded ladder |
+| `/bedrouter doctor` | Which credential source resolved, expiry, and the loaded stack |
 | `/bedrouter probe` | One 1-token request per rung: which models this AWS account can actually invoke |
 | `/bedrouter usage` | This Pi session so far: requests, tokens, spend (models + classifier), what the asked-for model would have cost, saved/over, and a per-route table. Whole-session totals need bedrouter ≥ 0.3; against an older server it shows the current conversation and says so. `usage all` lists recent sessions on the server (`*` marks this one) |
 | `/bedrouter report [--since t] [--session key] [--json]` | Savings report over the decision log (all clients, all sessions; `--session` narrows it to one) |
 | `/bedrouter log [n]` | The last n routing decisions, one line each |
-| `/bedrouter models` | Re-read `bedrouter.json` and re-register the provider (after editing the ladder) |
+| `/bedrouter models` | Re-read `bedrouter.json` and re-register the provider (after editing the stack) |
 | `/bedrouter fitnotes` | Merge model notes into `~/.pi/agent/workflows.json` so the pi-agents planner defaults to `bedrouter/auto` and only pins premium rungs for planning/review |
 | `/bedrouter config` | Show (and create) the settings file |
 
@@ -82,7 +82,7 @@ Under a coding agent every request carries tools and a large system prompt, so y
 
 ## Model ids
 
-From bedrouter's example config: `auto` (Anthropic ladder, router decides), `auto-oss` (gpt-oss ladder), and the rungs `haiku`, `sonnet`, `opus`, `gpt-oss-20b`, `gpt-oss-120b`. Picking a rung is a floor: bedrouter may still go up (explore, escalation) but not below it. Picking `auto` hands it the whole decision. The `cost` Pi shows for `auto` is the family's execute rung; bedrouter's log and `/bedrouter report` have what was actually charged.
+`auto` hands the whole choice to bedrouter's ordered, capability-filtered stack. Every enabled rung is also registered for explicit pinning. Pi reads each model's API, input modes, context window, output cap, and price from the capability block returned by `/v1/models`; bedrouter's log and `/bedrouter report` record what was actually charged.
 
 If your `~/.pi/agent/settings.json` has an `enabledModels` allowlist, add `bedrouter/auto` (and any rungs you want visible) or the provider's models will be hidden.
 

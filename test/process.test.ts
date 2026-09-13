@@ -17,7 +17,7 @@ test("locate/ensureHome/readConfig/start against a checkout", { skip: !checkout 
   const created = br.ensureHome(s, loc);
   assert.deepEqual(created.map((f) => path.basename(f)).sort(), [".env", "bedrouter.json"]);
   const cfg = br.readConfig(s, loc);
-  assert.ok("config" in cfg && cfg.config.families.anthropic.length > 0);
+  assert.ok("config" in cfg && cfg.config.stack.length > 0);
   assert.equal(await br.health(s), null);
   // With no credentials the preflight refuses to serve; start() must surface the reason from server.log instead of hanging.
   const r = await br.start(s, loc);
