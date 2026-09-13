@@ -15,9 +15,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { loadSettings, saveSettings, settingsPath, agentDir, type Settings } from "../src/settings.js";
 import * as br from "../src/bedrouter.js";
 import { fitNotes, piModels } from "../src/models.js";
+import { wantsUs } from "../src/selection.js";
 import { downLine, fromHeaders, readyLine, restartingLine, sessionsTable, statusLine, usageReport, type CostTotals, type LastDecision, type Paint } from "../src/footer.js";
 
-export default async function (pi: ExtensionAPI) {
+export async function activate(pi: ExtensionAPI, runtime: typeof br = br) {
   let settings = loadSettings();
   let last: LastDecision | null = null;
   let stats: CostTotals | null = null;            // footer totals: the session when the server supports it, else the last conversation
@@ -33,8 +34,8 @@ export default async function (pi: ExtensionAPI) {
   /** Whole-session totals from bedrouter (>= 0.3); falls back to the last conversation on older servers. */
   async function refreshStats(ctx: ExtensionContext): Promise<{ session: br.SessionStats | null; conversation: br.ConversationStats | null }> {
     const id = sessionId(ctx);
-    const session = id ? await br.session(settings, id) : null;
-    const conversation = !session && last?.conversation ? await br.conversation(settings, last.conversation) : null;
+    const session = id ? await runtime.session(settings, id) : null;
+    const conversation = !session && last?.conversation ? await runtime.conversation(settings, last.conversation) : null;
     stats = session ?? conversation ?? stats;
     return { session, conversation };
   }
@@ -52,13 +53,13 @@ export default async function (pi: ExtensionAPI) {
   async function registerProvider(loc: br.Found | null): Promise<string> {
     let cfg: br.BedrouterConfig | null = null;
     let source = "";
-    const live = await br.liveConfig(settings);
+    const live = await runtime.liveConfig(settings);
     if (live && Object.keys(live.families).length) { cfg = live; source = `${br.baseUrl(settings)}/v1/models`; }
     if (!cfg) {
-      const file = br.readConfig(settings, loc);
+      const file = runtime.readConfig(settings, loc);
       if ("config" in file) { cfg = file.config; source = file.path; }
     }
-    if (!cfg) { cfg = br.FALLBACK_CONFIG; source = "built-in default ladder (no server, no bedrouter.json yet)"; }
+    if (!cfg) { cfg = runtime.FALLBACK_CONFIG; source = "built-in default ladder (no server, no bedrouter.json yet)"; }
     const models = piModels(cfg, br.baseUrl(settings));
     pi.registerProvider(settings.providerName, {
       name: "bedrouter (Bedrock, routed)",
@@ -76,24 +77,24 @@ export default async function (pi: ExtensionAPI) {
   /** Locate → (install) → start → register. Returns a human summary. Never throws. */
   async function bringUp(ctx: ExtensionContext | null, opts: { install?: boolean; start?: boolean } = {}): Promise<{ ok: boolean; lines: string[] }> {
     const lines: string[] = [];
-    let loc = br.locate(settings);
+    let loc = runtime.locate(settings);
     if (!loc.found && opts.install) {
       lines.push(`bedrouter not found (${loc.reason}); installing…`);
-      const r = br.install(settings);
+      const r = runtime.install(settings);
       lines.push(r.log.trim().split("\n").slice(-6).join("\n"));
-      loc = br.locate(settings);
+      loc = runtime.locate(settings);
     }
     if (!loc.found) { lines.push(`bedrouter is not installed: ${loc.reason}. Run /bedrouter install (or: ${loc.installCmd}).`); return { ok: false, lines }; }
     if (!loc.cli && opts.install) {
       lines.push(`bedrouter at ${loc.dir} is not built; building…`);
-      const r = br.install(settings);
+      const r = runtime.install(settings);
       lines.push(r.log.trim().split("\n").slice(-6).join("\n"));
-      loc = br.locate(settings);
+      loc = runtime.locate(settings);
     }
     lines.push(await registerProvider(loc as br.Found));
     if (opts.start) {
-      const before = await br.health(settings);
-      const r = await br.start(settings, loc as br.Found);
+      const before = await runtime.health(settings);
+      const r = await runtime.start(settings, loc as br.Found);
       for (const f of r.created) lines.push(`created ${f} from the example; edit it for this machine (AWS_PROFILE, ladder)`);
       if (r.ok) {
         if (!before?.ok) startedHere = true;
@@ -106,6 +107,7 @@ export default async function (pi: ExtensionAPI) {
   async function autoSelect(ctx: ExtensionContext) {
     if (settings.autoSelect === false || !ctx.hasUI) return;
     if (isOurs(ctx)) return;
+    if (!wantsUs(settings)) return;
     const want = registeredModelIds.includes(settings.autoSelect) ? settings.autoSelect : registeredModelIds.find((id) => id.startsWith("auto")) ?? registeredModelIds[0];
     if (!want) return;
     const model = ctx.modelRegistry.find(settings.providerName, want);
@@ -118,7 +120,7 @@ export default async function (pi: ExtensionAPI) {
   // The factory is async, so pi waits for this: the provider exists for `pi --list-models` and `--provider bedrouter`
   // whether or not the server or a checkout is present yet.
   {
-    const loc = br.locate(settings);
+    const loc = runtime.locate(settings);
     await registerProvider(loc.found ? loc : null);
   }
 
@@ -126,22 +128,31 @@ export default async function (pi: ExtensionAPI) {
     lastCtx = ctx;
     if (ev.reason !== "startup" && ev.reason !== "new") { if (isOurs(ctx)) setStatus(ctx, statusLine(last, stats, paint(ctx))); return; }
     last = null; stats = null;
-    const h = await br.health(settings);
+    const h = await runtime.health(settings);
     serverUp = !!h?.ok;
-    if (!h?.ok && settings.autoStart) {
+    const intended = wantsUs(settings);
+    if (!h?.ok && settings.autoStart && intended) {
       const r = await bringUp(ctx, { install: true, start: true });
       serverUp = r.ok;
       if (!r.ok) { notify(ctx, `bedrouter: ${r.lines[r.lines.length - 1]}`, "warning"); setStatus(ctx, downLine("/bedrouter start", paint(ctx))); return; }
       const created = r.lines.filter((l) => l.startsWith("created "));
       if (created.length) notify(ctx, created.join("\n"), "warning");
-    } else if (!h?.ok) { setStatus(ctx, downLine("/bedrouter start", paint(ctx))); return; }
+    } else if (!h?.ok && intended) { setStatus(ctx, downLine("/bedrouter start", paint(ctx))); return; }
+    else if (!intended) { setStatus(ctx, undefined); return; }
     await autoSelect(ctx);
     if (isOurs(ctx)) setStatus(ctx, readyText(ctx));
   });
 
   pi.on("model_select", async (ev, ctx) => {
-    if (ev.model.provider === settings.providerName) setStatus(ctx, statusLine(last, stats, paint(ctx)));
-    else setStatus(ctx, undefined);
+    if (ev.model.provider !== settings.providerName) { setStatus(ctx, undefined); return; }
+    const h = await runtime.health(settings);
+    serverUp = !!h?.ok;
+    if (!h?.ok && settings.autoStart) {
+      const r = await bringUp(ctx, { install: true, start: true });
+      serverUp = r.ok;
+      if (!r.ok) { notify(ctx, `bedrouter: ${r.lines[r.lines.length - 1]}`, "warning"); setStatus(ctx, downLine("/bedrouter start", paint(ctx))); return; }
+    }
+    setStatus(ctx, serverUp ? statusLine(last, stats, paint(ctx)) : downLine("/bedrouter start", paint(ctx)));
   });
 
   // ---- live routing display ------------------------------------------------------------------------------------
@@ -176,7 +187,7 @@ export default async function (pi: ExtensionAPI) {
   async function checkHealth() {
     const ctx = lastCtx;
     if (!ctx || !isOurs(ctx)) return;
-    const h = await br.health(settings);
+    const h = await runtime.health(settings);
     const up = !!h?.ok;
     if (up === serverUp) return;
     serverUp = up;
@@ -306,3 +317,5 @@ export default async function (pi: ExtensionAPI) {
     },
   });
 }
+
+export default activate;

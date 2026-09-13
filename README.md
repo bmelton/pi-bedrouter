@@ -49,6 +49,15 @@ Example for a developer with a checkout:
 { "path": "~/projects/ai/bedrouter", "autoSelect": "auto-oss" }
 ```
 
+Automatic selection applies only when the session did not name a provider or
+model and Pi's `defaultProvider` is absent or `bedrouter`. An explicit
+`--provider`/`--model` choice or a different `defaultProvider` leaves the session
+on that provider and does not start the bedrouter server. Set
+`PI_BEDROUTER_AUTOSELECT=0` to disable automatic startup and selection for one
+process. The provider remains registered, so `/model`, `--list-models`, and a
+later switch to `bedrouter/*` still work; switching later starts the server when
+`autoStart` is enabled.
+
 ## Commands
 
 | Command | Does |

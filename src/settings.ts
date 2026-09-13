@@ -12,7 +12,7 @@ export type Settings = {
   port: number;
   /** Start the server on session start when it is not running. */
   autoStart: boolean;
-  /** Model id (from bedrouter's aliases, e.g. "auto" or "auto-oss") to switch the session to when bedrouter is healthy; false to leave the model alone. */
+  /** Model id (from bedrouter's aliases) to select only when no higher-precedence provider/model choice exists; false leaves the model alone. */
   autoSelect: string | false;
   /** Start the server with BEDROUTER_DEBUG=1 (per-request trace in server.log). */
   debug: boolean;

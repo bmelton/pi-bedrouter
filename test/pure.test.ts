@@ -2,6 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { piModels, fitNotes } from "../src/models.js";
 import { fromHeaders, sessionsTable, statusLine, usageReport } from "../src/footer.js";
+import { launchedWithExplicitModel, wantsUs } from "../src/selection.js";
+
+test("explicit provider/model detection stops at -- and does not match --models", () => {
+  assert.equal(launchedWithExplicitModel(["--model", "x"]), true);
+  assert.equal(launchedWithExplicitModel(["--model=x"]), true);
+  assert.equal(launchedWithExplicitModel(["--provider", "x"]), true);
+  assert.equal(launchedWithExplicitModel(["--provider=x"]), true);
+  assert.equal(launchedWithExplicitModel(["--models", "a,b"]), false);
+  assert.equal(launchedWithExplicitModel(["--", "--model", "x"]), false);
+  assert.equal(launchedWithExplicitModel([]), false);
+});
+
+test("bedrouter auto-selection respects argv, defaultProvider, and the environment escape hatch", () => {
+  const settings = { providerName: "bedrouter" };
+  const check = (options: Parameters<typeof wantsUs>[1] = {}) => wantsUs(settings, { argv: [], env: {}, defaultProvider: () => undefined, ...options });
+  assert.equal(check(), true);
+  assert.equal(check({ defaultProvider: () => "bedrouter" }), true);
+  assert.equal(check({ defaultProvider: () => "openai" }), false);
+  assert.equal(check({ argv: ["--provider", "openai"] }), false);
+  assert.equal(check({ env: { PI_BEDROUTER_AUTOSELECT: "0" } }), false);
+});
 
 const cfg = {
   families: {
